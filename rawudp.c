@@ -13,6 +13,7 @@
 #include <linux/if_ether.h>
 #include <netinet/ip.h>
 #include <netinet/udp.h>
+#include <linux/tcp.h>
 #include <netdb.h>
 #include <netpacket/packet.h>
 #include <arpa/inet.h>
@@ -69,6 +70,7 @@ struct ifreq ifreq_ip;
 char sendbuf[PCKT_LEN];
 struct ether_header *eh=(struct ether_header *)sendbuf;
 struct iphdr *iph= (struct iphdr *) (sendbuf + sizeof(struct ether_header));
+struct tcphdr *tcph = (struct tcphdr*)(sendbuf + sizeof(struct iphdr) + sizeof(struct ether_header));
 struct udphdr *udph = (struct udphdr*)(sendbuf + sizeof(struct iphdr) + sizeof(struct ether_header));
 
 int createSocket(char *device){
@@ -135,14 +137,14 @@ int constructEthernetHeader(){
 }
 
 
-int constructIPHeader(char *saddr, char *daddr){
+int constructIPHeader(char *saddr, char *daddr, int protocol){
 
 	iph->ihl=5;
 	iph->version=4;
 	iph->tos=16;
 	iph->id=htons(54321);
 	iph->ttl=40;
-	iph->protocol=17;
+	iph->protocol=protocol;
 	iph->saddr=inet_addr(saddr);
 	iph->daddr=inet_addr(daddr);
 	iph->check=checksum((unsigned short*)(sendbuf+ sizeof(struct ether_header)), sizeof(struct iphdr)/2);
@@ -150,13 +152,36 @@ int constructIPHeader(char *saddr, char *daddr){
 	totalLength += sizeof(struct iphdr);
 }
 
-int constructUDPHeader(){
+void constructUDPHeader(){
 
 	udph->source= htons(3423);
 	udph->dest = htons(5432);
 	udph->check = 0;
 
 	totalLength += sizeof(struct udphdr);
+}
+
+
+void constructTCPHeader(){
+	tcph->source = htons(5431); //16 bit in nbp format of source port
+	tcph->dest = htons(3123); //16 bit in nbp format of destination port
+	tcph->seq = 0x0; //32 bit sequence number, initially set to zero
+	tcph->ack_seq = 0x0; //32 bit ack sequence number, depends whether ACK is set or not
+	tcph->doff = 5; //4 bits: 5 x 32-bit words on tcp header
+	tcph->res1 = 0; //4 bits: Not used
+	tcph->cwr = 0; //Congestion control mechanism
+	tcph->ece = 0; //Congestion control mechanism
+	tcph->urg = 0; //Urgent flag
+	tcph->ack = 0; //Acknownledge
+	tcph->psh = 0; //Push data immediately
+	tcph->rst = 0; //RST flag
+	tcph->syn = 1; //SYN flag
+	tcph->fin = 0; //Terminates the connection
+	tcph->window = htons(155);//0xFFFF; //16 bit max number of databytes
+	tcph->check = 0; //16 bit check sum. Can't calculate at this point
+	tcph->urg_ptr = 0; //16 bit indicate the urgent data. Only if URG flag is set
+
+	totalLength+= sizeof(struct tcphdr);
 }
 
 void constructPayload(){
@@ -177,11 +202,15 @@ int main(int argc, char* argv[]){
 		exit(-1);
 	}
 
+
+	int ch=0;
+	printf("Which packet do you want to send?\n");
+	printf("1. UDP\n");
+	printf("2. TCP\n");
+	scanf("%d",&ch);
+
 	int sock_fd= createSocket(argv[1]);
 	constructEthernetHeader();
-	constructIPHeader(argv[2],argv[3]);
-	constructUDPHeader();
-	constructPayload();
 
 	struct sockaddr_ll socket_address;
 	socket_address.sll_ifindex = ifreq_i.ifr_ifindex;
@@ -192,6 +221,21 @@ int main(int argc, char* argv[]){
 	socket_address.sll_addr[3]=MY_DEST_MAC3;
 	socket_address.sll_addr[4]=MY_DEST_MAC4;
 	socket_address.sll_addr[5]=MY_DEST_MAC5;
+
+	switch(ch){
+		case 1: constructIPHeader(argv[2],argv[3],17);
+			constructUDPHeader();
+			constructPayload();
+			break;
+		case 2: constructIPHeader(argv[2],argv[3],6);
+			constructTCPHeader();
+			constructPayload();
+			break;
+
+		default: printf("Wrong Choice... Try again...");
+			 exit(-1);
+	}
+
 
 	if(sendto(sock_fd, sendbuf, totalLength, 0, (struct sockaddr*)&socket_address, sizeof(struct sockaddr_ll))<0){
 		printf ("Send failed\n");
